@@ -29,19 +29,16 @@ typedef struct {
     unsigned char *value_ptr;
 } Tlv;
 
-unsigned char *writeTlv(const Tlv tlv, unsigned char *bytearray) {
+void writeTlv(const Tlv tlv, unsigned char *bytearray) {
     bytearray[0] = tlv.type;
     bytearray[1] = tlv.length;
     memcpy(bytearray + 2, tlv.value_ptr, tlv.length);
-    return bytearray + 2 + tlv.length;
 }
 
 Tlv createTlv(unsigned char *bytearray) {
     unsigned char len = bytearray[1];
     Tlv tlv = {.type = bytearray[0], .length = len, .value_ptr = malloc(len)};
-    bytearray += 2;
-    memcpy(tlv.value_ptr, bytearray, len);
-    bytearray += len;
+    memcpy(tlv.value_ptr, bytearray + 2, len);
     return tlv;
 }
 
@@ -64,9 +61,8 @@ void sendFile(const LinkLayer connectionParameters, const char *filename) {
     fclose(fp);
     
     Tlv tlvFilesize = {.type = TLV_FILESIZE, .length = sizeof filesize, .value_ptr = (unsigned char *) &filesize};
-    Tlv tlvFilename = {.type = TLV_FILENAME, .length = strlen(filename), .value_ptr = (unsigned char *) filename};
-
-    int controlPacketSize = 1 + (1 + 1 + tlvFilesize.length) + (1 + 1 + tlvFilename.length);
+    
+    int controlPacketSize = 1 + (1 + 1 + tlvFilesize.length);
     unsigned char *controlPacket = malloc(controlPacketSize);
     if (!controlPacket) {
         printf("Could not allocate memory for control packet.\n");
@@ -74,8 +70,7 @@ void sendFile(const LinkLayer connectionParameters, const char *filename) {
     }
     controlPacket[0] = C_START;
 
-    unsigned char *tmp_ptr = writeTlv(tlvFilesize, controlPacket + 1);
-    writeTlv(tlvFilename, tmp_ptr);
+    writeTlv(tlvFilesize, controlPacket + 1);
 
     llwrite(controlPacket, controlPacketSize);
 
@@ -105,7 +100,7 @@ void sendFile(const LinkLayer connectionParameters, const char *filename) {
     free(buffer);
 }
 
-void receiveFile(const LinkLayer connectionParameters) {
+void receiveFile(const LinkLayer connectionParameters, const char *filename) {
     unsigned char *packet = malloc(MAX_PAYLOAD_SIZE);
     if (!packet) {
         printf("Could not allocate memory for packet.\n");
@@ -119,12 +114,11 @@ void receiveFile(const LinkLayer connectionParameters) {
 
     unsigned char *tmp_ptr = packet + 1;
     Tlv tlvFilesize = createTlv(tmp_ptr);
-    Tlv tlvFilename = createTlv(tmp_ptr);
     long filesize = *((long *) tlvFilesize.value_ptr);
 
     printf("Filesize: %ld\n", filesize);
 
-    FILE* fp = fopen("../new_penguin.gif", "wb");
+    FILE* fp = fopen(filename, "wb");
     if(!fp) {
         printf("Could not write to file.\n");
         exit(1);
@@ -153,7 +147,6 @@ void receiveFile(const LinkLayer connectionParameters) {
 
     llread(packet);
     //free(tlvFilesize.value_ptr);
-    //free(tlvFilename.value_ptr);
     free(packet);
 }
 
@@ -181,7 +174,7 @@ void applicationLayer(const char *serialPort, const char *roleStr, int baudRate,
     };
     
     if (role == LlTx) sendFile(ll, filename);
-    else if (role == LlRx) receiveFile(ll);
+    else if (role == LlRx) receiveFile(ll, filename);
 
     llclose(FALSE);
 }
