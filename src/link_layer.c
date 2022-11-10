@@ -7,6 +7,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <termios.h>
+#include <time.h>
 #include <unistd.h>
 
 #include "alarm.h"
@@ -76,10 +77,14 @@ struct termios newtio = {0};
 
 int numPackets = 0;
 
+struct timespec start = {0};
+struct timespec end = {0};
+
 unsigned char FLAG_SEQUENCE[2] = {ESCAPE, STUFF(FLAG)};
 unsigned char ESCAPE_SEQUENCE[2] = {ESCAPE, STUFF(ESCAPE)};
 
 int awaitFrameSU(Control control) {
+    printf("Awaiting control 0x%02x...\n", control);
     StateMachine sm = START;
     unsigned char c = 0;
     unsigned char bcc1 = BCC1(control);
@@ -104,7 +109,10 @@ int awaitFrameSU(Control control) {
                 else sm = START;
                 break;
             case BCC_OK:
-                if (c == FLAG) return TRUE;
+                if (c == FLAG) {
+                    printf("Got it!\n");
+                    return TRUE;
+                }
                 else sm = START;
                 break;
             default:
@@ -112,22 +120,25 @@ int awaitFrameSU(Control control) {
                 exit(1);
         }
     }
+    printf("Timed out.\n");
     return FALSE;
 }
 
 int sendFrameSU(Control control) {
+    printf("Sending control 0x%02x.\n", control);
     unsigned char frame[FRAME_SU_SIZE] = {FLAG, ADDRESS_TRANSMISSION, control, BCC1(control), FLAG};
     return write(fd, frame, FRAME_SU_SIZE);
 }
 
 int sendAwait(Control c1, Control c2) {
-    while (numRetransmissions < connectionParameters.nRetransmissions) {
+    for (int i = 0; i < connectionParameters.nRetransmissions; ++i) {
         sendFrameSU(c1);
         setAlarm();
         if (awaitFrameSU(c2)){
             resetAlarm();
             return TRUE;
         }
+        printf("Retransmission number %d:\n", i);
     }
     return FALSE;
 }
@@ -136,6 +147,7 @@ int sendAwait(Control c1, Control c2) {
 // LLOPEN
 ////////////////////////////////////////////////
 int llopen(LinkLayer newConnectionParameters) {
+    clock_gettime(CLOCK_REALTIME, &start);
     printf("Establishing connection.\n");
     connectionParameters = newConnectionParameters;
     // Open serial port device for reading and writing, and not as controlling tty
@@ -198,10 +210,11 @@ int llopen(LinkLayer newConnectionParameters) {
 }
 
 int awaitACK() {
-    printf("Awaiting ACK for packet number %d.\n", numPackets);
+    printf("Awaiting ACK for packet number %d...\n", numPackets);
     StateMachine sm = START;
     unsigned char c = 0;
     unsigned char control = 0;
+    int isPositive = FALSE;
     while (!isTimeout) {
         if (read(fd, &c, 1) != 1) continue;
         switch (sm) {
@@ -225,7 +238,11 @@ int awaitACK() {
                 else sm = START;
                 break;
             case BCC_OK:
-                if (c == FLAG) return CAN_SEND_PACKET(numPackets + 1, control);
+                if (c == FLAG) {
+                    isPositive = CAN_SEND_PACKET(numPackets + 1, control);
+                    printf("Got %s!\n", (isPositive ? "RR" : "REJ"));
+                    return isPositive;
+                }
                 else sm = START;
                 break;
             default:
@@ -233,6 +250,7 @@ int awaitACK() {
                 exit(1);
         }
     }
+    printf("Timed out.\n");
     return FALSE;
 }
 
@@ -243,8 +261,8 @@ int llwrite(const unsigned char *buf, int bufSize) {
     unsigned char control = C_I(numPackets);
     unsigned char frameHeader[FRAME_I_HEADER_SIZE] = {FLAG, ADDRESS_TRANSMISSION, control, BCC1(control)};
     unsigned char frameTrailer[FRAME_I_TRAILER_SIZE] = {0, FLAG};
-    while (numRetransmissions < connectionParameters.nRetransmissions) {
-        printf("Sending packet number %d. Transmission number %d.\n", numPackets, numRetransmissions);
+    for (int i = 0; i < connectionParameters.nRetransmissions; ++i) {
+        printf("Sending packet number %d.\n", numPackets);
         int bytes = write(fd, frameHeader, FRAME_I_HEADER_SIZE);
 
         unsigned char bcc2 = 0;
@@ -268,6 +286,7 @@ int llwrite(const unsigned char *buf, int bufSize) {
             resetAlarm();
             return bytes;
         }
+        printf("Retransmission number %d:\n", i);
     }
     return -1;
 }
@@ -278,7 +297,7 @@ int llwrite(const unsigned char *buf, int bufSize) {
 int llread(unsigned char *packet) {
     StateMachine sm = START;
     unsigned char control = C_I(numPackets);
-    printf("Reading packet number %d.\n", numPackets);
+    printf("Reading packet number %d...\n", numPackets);
     unsigned char bcc1 = BCC1(control);
     unsigned char bcc2 = 0;
     unsigned char c = 0;
@@ -324,10 +343,10 @@ int llread(unsigned char *packet) {
                     unsigned char controlReply = C_R(isPositive, numPackets);
                     frame[2] = controlReply;
                     frame[3] = BCC1(controlReply);
-                    /*for (int i = 0; i < 1000; ++i)*/ write(fd, frame, FRAME_SU_SIZE); // TODO
-
+                    write(fd, frame, FRAME_SU_SIZE);
                     if (isPositive) {
                         ++numPackets;
+                        printf("Read successfully.\n");
                         return idx;
                     }
                     else sm = FLAG_RCV;
@@ -354,6 +373,7 @@ int llread(unsigned char *packet) {
                 exit(1);
         }
     }
+    printf("Timed out.\n");
     return -1;
 }
 
@@ -380,6 +400,17 @@ int llclose(int showStatistics) {
     close(fd);
 
     printf("Connection closed.\n");
+
+    if (showStatistics) {
+        clock_gettime(CLOCK_REALTIME, &end);
+        double time_spent = (end.tv_sec - start.tv_sec) + (end.tv_nsec - start.tv_nsec) / 1000000000.0;
+        if (connectionParameters.role == LlTx) {
+            printf("Sent %d packets in %f seconds.\n", numPackets, time_spent);
+        }
+        else if (connectionParameters.role == LlRx) {
+            printf("Received %d packets in %f seconds.\n", numPackets, time_spent);
+        }
+    }
 
     return 1;
 }

@@ -79,6 +79,7 @@ void sendFile(const LinkLayer connectionParameters, const char *filename) {
     unsigned sequenceNumber = 0;
     unsigned numOctets = 0;
     while (bytesToWrite) {
+        printf("Bytes to write: %ld, Sequence number: %u\n", bytesToWrite, sequenceNumber);
         numOctets = MIN(MAX_PAYLOAD_SIZE - DATA_PACKET_HEADER_SIZE, bytesToWrite);
         buffer[currPacketStart] = C_DATA;
         buffer[currPacketStart + 1] = sequenceNumber++ & 0xFF;
@@ -176,5 +177,5 @@ void applicationLayer(const char *serialPort, const char *roleStr, int baudRate,
     if (role == LlTx) sendFile(ll, filename);
     else if (role == LlRx) receiveFile(ll, filename);
 
-    llclose(FALSE);
+    llclose(TRUE);
 }
